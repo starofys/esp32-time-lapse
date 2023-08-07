@@ -1,4 +1,5 @@
 #include <Arduino.h>
+#include <LittleFS.h>
 #include <ESP8266HTTPClient.h>
 #include <ESP8266httpUpdate.h>
 #include <WiFiClient.h>
@@ -7,6 +8,7 @@
 #include <Ticker.h>
 #include <FS.h>
 #include <WiFiUdp.h>
+#include "led.h"
 #include <arduino_homekit_server.h>
 
 File fsUploadFile,mqttConfigFile;
@@ -19,6 +21,7 @@ Ticker reconnectWifi;
 
 void web_server_loop()
 {
+    yield();
     if (WiFi.isConnected())
     {
         server.handleClient();
@@ -49,9 +52,12 @@ void handleReset()
 
 
     reconnectWifi.once(10, []
-                               {  SPIFFS.end(),ESP.restart(); });
+                               {  ESP.restart(); });
 }
 void handleFileUpload() {
+    if (!LittleFS.check()) {
+        return;
+    }
 	String filename;
 	HTTPUpload& upload = server.upload();
 	if (upload.totalSize > 102400) {
@@ -73,7 +79,8 @@ void handleFileUpload() {
 			filename = "/" + filename;
 		}
 		printf("handleFileUpload Name: %s\n", filename.c_str());
-		fsUploadFile = SPIFFS.open(filename, "w");
+        
+		fsUploadFile = LittleFS.open(filename, "w");
 		filename = String();
 	}
 	else if (upload.status == UPLOAD_FILE_WRITE) {
@@ -95,12 +102,19 @@ void handleFileUpload() {
 
 void web_server_init()
 {
-    Serial.println("web_server_init\n");
-    SPIFFS.begin();
+    Serial.println("web_server_init");
+    
+    if (!LittleFS.check()) {
+        if (LittleFS.format()) {
+            Serial.println("format success");
+        } else {
+            Serial.println("format fail");
+        }
+    };
 
-    if (SPIFFS.exists("/wifi.html"))
+    if (LittleFS.check() && LittleFS.begin() && LittleFS.exists("/wifi.html"))
     {
-        server.serveStatic("/", SPIFFS, "/wifi.html");
+        server.serveStatic("/", LittleFS, "/wifi.html");
     }
     else
     {

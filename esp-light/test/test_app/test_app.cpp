@@ -12,12 +12,13 @@ void tearDown(void) {
 }
 
 
-int main(int argc, char **argv) {
+int aaaa(int argc, char **argv) {
 
-    printf("start test\n");
+    printf("start test aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n");
     
     //int a = 1/0;
     UNITY_BEGIN();
+    printf("start test aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n");
     UNITY_END();
     return 0;
 }
