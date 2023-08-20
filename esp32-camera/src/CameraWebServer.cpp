@@ -1,145 +1,166 @@
-#include "esp_camera.h"
 #include "esp_inc.h"
-//
-// WARNING!!! PSRAM IC required for UXGA resolution and high JPEG quality
-//            Ensure ESP32 Wrover Module or other board with PSRAM is selected
-//            Partial images will be transmitted if image exceeds buffer size
-//
-//            You must select partition scheme from the board menu that has at least 3MB APP space.
-//            Face Recognition is DISABLED for ESP32 and ESP32-S2, because it takes up from 15 
-//            seconds to process single frame. Face Detection is ENABLED if PSRAM is enabled as well
-
-// ===================
-// Select camera model
-// ===================
-//#define CAMERA_MODEL_WROVER_KIT // Has PSRAM
-// #define CAMERA_MODEL_ESP_EYE // Has PSRAM
-//#define CAMERA_MODEL_ESP32S3_EYE // Has PSRAM
-//#define CAMERA_MODEL_M5STACK_PSRAM // Has PSRAM
-//#define CAMERA_MODEL_M5STACK_V2_PSRAM // M5Camera version B Has PSRAM
-//#define CAMERA_MODEL_M5STACK_WIDE // Has PSRAM
-//#define CAMERA_MODEL_M5STACK_ESP32CAM // No PSRAM
-//#define CAMERA_MODEL_M5STACK_UNITCAM // No PSRAM
-#define CAMERA_MODEL_AI_THINKER // Has PSRAM
-//#define CAMERA_MODEL_TTGO_T_JOURNAL // No PSRAM
-// ** Espressif Internal Boards **
-#define CAMERA_MODEL_ESP32_CAM_BOARD
-//#define CAMERA_MODEL_ESP32S2_CAM_BOARD
-//#define CAMERA_MODEL_ESP32S3_CAM_LCD
-
-#include "camera_pins.h"
-
+#include <camera_handler.h>
+#include <WiFiUdp.h>
+#include <SD.h>
+#include "SPIRAM.h"
 // ===========================
 // Enter your WiFi credentials
 // ===========================
 const char* ssid = "LEDE";
 const char* password = "zwyysfsj";
+const char * udpAddress = "192.168.123.116";
+const int udpPort = 8080;
+const int udpSize = 1460 - 4;
+
+CameraOption options;
+camera_fb_t prev = {0};
 char hostString[16];
 WebServer httpServer(8080);
 HTTPUpdateServer httpUpdater(true);
+TaskHandle_t cameraTask;
+WiFiUDP udp;
 
-void startCameraServer();
-void setupLedFlash(int pin);
-camera_config_t config;
+int shared_variable = 0;
+SemaphoreHandle_t shared_var_mutex = NULL;
+
+void handlerHttp( void *pvParameters ) {
+  for(;;) {
+    httpServer.handleClient();
+    delay(50);
+  }
+}
+
+void cameraHandler( void *pvParameters ) {
+  sensor_t *s = esp_camera_sensor_get();
+  for(;;) {
+    camera_stop();
+    delay(options.sleep);
+
+    if(!WiFi.isConnected()) {
+      continue;
+    }
+
+    camera_start();
+    delay(80);
+    unsigned long now = millis();
+    camera_fb_t *fb = esp_camera_fb_get();
+    if (!fb) {
+        log_e("Camera capture failed %d",s->pixformat);
+        continue;
+    }
+    camera_stop();
+    char ts[32];
+    snprintf(ts, 32, "%ld.%06ld", fb->timestamp.tv_sec, fb->timestamp.tv_usec);
+    // esp_camera_fb_return(fb);
+    Serial.printf("tm = %s, duertion %ld, len = %d\n", ts, millis() - now, fb->len);
+
+    uint8_t *buf = prev.buf;
+    if (prev.len < fb->len) {
+      if (buf) {
+        free(buf);
+      }
+      buf = (uint8_t*)ps_malloc(fb->len);
+    }
+    prev = *fb;
+    prev.buf = buf;
+    if (prev.buf) {
+      int i = 5;
+      do {
+        if (xSemaphoreTake(shared_var_mutex, portMAX_DELAY) == pdTRUE) {
+          memcpy(prev.buf, fb->buf, fb->len);
+          xSemaphoreGive(shared_var_mutex);
+          break;
+        }
+        else {
+          delay(50);
+        }
+        i--;
+      } while (i > 0);
+      if (i == 0) {
+        log_e("camera mutex failed");
+      }
+    } else {
+      prev.buf = 0;
+    }
+    WiFi.setSleep(false);
+    delay(100);
+    udp.beginPacket(udpAddress,udpPort);
+    int startIdx = 0,endIdx;
+    int idx = 0;
+    int32_t head;
+    int action = 1;
+    for(;;) {
+      
+      endIdx = startIdx + udpSize;
+      if (endIdx > fb->len) {
+        endIdx =  fb->len;
+      }
+      head = CRC16((const char*)fb->buf,endIdx -  startIdx);
+      head |= idx << 16;
+      head |= action << 24;
+      udp.write((uint8_t*)&head,4);
+      for(;startIdx < endIdx;startIdx++) {
+        udp.write(fb->buf[startIdx]);
+      }
+      if (startIdx >=fb->len) {
+        break;
+      }
+      idx++;
+    }
+    udp.endPacket();
+
+    esp_camera_fb_return(fb);
+    WiFi.setSleep(true);
+    
+  }
+}
+void startCameraTask() {
+  sensor_t *s = esp_camera_sensor_get();
+  if (!s) {
+    return;
+  }
+  xTaskCreatePinnedToCore(
+    cameraHandler
+    ,  "camera"
+    ,  2048  // Stack size
+    ,  (void*)s  // When no parameter is used, simply pass NULL
+    ,  1  // Priority
+    ,  &cameraTask // With task handle we will be able to manipulate with this task.
+    ,  ARDUINO_RUNNING_CORE // Core on which the task will run
+    );
+}
+
+void WiFiEvent(WiFiEvent_t event){
+    int ret = 0;
+    switch(event) {
+      case ARDUINO_EVENT_WIFI_STA_GOT_IP:
+          //When connected set 
+          Serial.print("WiFi connected! IP address: ");
+          Serial.println(WiFi.localIP());  
+          //initializes the UDP state
+          //This initializes the transfer buffer
+          ret = udp.begin(WiFi.localIP(),udpPort);
+          Serial.printf("UDP code=%d\n",ret);
+          break;
+      case ARDUINO_EVENT_WIFI_STA_DISCONNECTED:
+          Serial.println("WiFi lost connection");
+          udp.stop();
+          break;
+      default: break;
+    }
+}
+
+
 void setup() {
 
   Serial.begin(115200);
   Serial.setDebugOutput(true);
-  Serial.println();
-  
 
   sprintf(hostString, "YSF%06X", ESP.getEfuseMac());
+  WiFi.onEvent(WiFiEvent);
+  WiFi.mode(WIFI_MODE_STA);
 	WiFi.hostname(hostString);
-
-  memset(&config,0,sizeof(camera_config_t));
-  
-  config.ledc_channel = LEDC_CHANNEL_0;
-  config.ledc_timer = LEDC_TIMER_0;
-  config.pin_d0 = Y2_GPIO_NUM;
-  config.pin_d1 = Y3_GPIO_NUM;
-  config.pin_d2 = Y4_GPIO_NUM;
-  config.pin_d3 = Y5_GPIO_NUM;
-  config.pin_d4 = Y6_GPIO_NUM;
-  config.pin_d5 = Y7_GPIO_NUM;
-  config.pin_d6 = Y8_GPIO_NUM;
-  config.pin_d7 = Y9_GPIO_NUM;
-  config.pin_xclk = XCLK_GPIO_NUM;
-  config.pin_pclk = PCLK_GPIO_NUM;
-  config.pin_vsync = VSYNC_GPIO_NUM;
-  config.pin_href = HREF_GPIO_NUM;
-  config.pin_sccb_sda = SIOD_GPIO_NUM;
-  config.pin_sccb_scl = SIOC_GPIO_NUM;
-  config.pin_pwdn = PWDN_GPIO_NUM;
-  config.pin_reset = RESET_GPIO_NUM;
-  config.xclk_freq_hz = 20000000;
-  config.frame_size = FRAMESIZE_UXGA;
-  config.pixel_format = PIXFORMAT_JPEG; // for streaming
-  //config.pixel_format = PIXFORMAT_RGB565; // for face detection/recognition
-  config.grab_mode = CAMERA_GRAB_WHEN_EMPTY;
-  config.fb_location = CAMERA_FB_IN_PSRAM;
-  config.jpeg_quality = 12;
-  config.fb_count = 1;
-  
-  // if PSRAM IC present, init with UXGA resolution and higher JPEG quality
-  //                      for larger pre-allocated frame buffer.
-  if(config.pixel_format == PIXFORMAT_JPEG){
-    if(psramFound()){
-      config.jpeg_quality = 10;
-      config.fb_count = 2;
-      config.grab_mode = CAMERA_GRAB_LATEST;
-    } else {
-      // Limit the frame size when PSRAM is not available
-      config.frame_size = FRAMESIZE_SVGA;
-      config.fb_location = CAMERA_FB_IN_DRAM;
-    }
-  } else {
-    // Best option for face detection/recognition
-    config.frame_size = FRAMESIZE_240X240;
-#if CONFIG_IDF_TARGET_ESP32S3
-    config.fb_count = 2;
-#endif
-  }
-
-#if defined(CAMERA_MODEL_ESP_EYE)
-  pinMode(13, INPUT_PULLUP);
-  pinMode(14, INPUT_PULLUP);
-#endif
-
-  // camera init
-  esp_err_t err = esp_camera_init(&config);
-  if (err != ESP_OK) {
-    Serial.printf("Camera init failed with error 0x%x", err);
-    return;
-  }
-
-  sensor_t * s = esp_camera_sensor_get();
-  // initial sensors are flipped vertically and colors are a bit saturated
-  if (s->id.PID == OV3660_PID) {
-    s->set_vflip(s, 1); // flip it back
-    s->set_brightness(s, 1); // up the brightness just a bit
-    s->set_saturation(s, -2); // lower the saturation
-  }
-  // drop down frame size for higher initial frame rate
-  if(config.pixel_format == PIXFORMAT_JPEG){
-    s->set_framesize(s, FRAMESIZE_QVGA);
-  }
-
-#if defined(CAMERA_MODEL_M5STACK_WIDE) || defined(CAMERA_MODEL_M5STACK_ESP32CAM)
-  s->set_vflip(s, 1);
-  s->set_hmirror(s, 1);
-#endif
-
-#if defined(CAMERA_MODEL_ESP32S3_EYE)
-  s->set_vflip(s, 1);
-#endif
-
-// Setup LED FLash if LED pin is defined in camera_pins.h
-#if defined(LED_GPIO_NUM)
-  setupLedFlash(LED_GPIO_NUM);
-#endif
-
   WiFi.begin(ssid, password);
-  WiFi.setSleep(false);
 
   while (WiFi.status() != WL_CONNECTED) {
     delay(500);
@@ -148,24 +169,81 @@ void setup() {
   Serial.println("");
   Serial.println("WiFi connected");
 
-  startCameraServer();
+
+  
+  options.frameSize = FrameSize_UXGA;
+  options.freqMHz = 10;
+  options.jpegQuality = 4;
+  options.pixFormat = PixFormat_JPEG;
+  options.flag = FLAG_H_MIRROR | FLAG_V_FLIP;
+
+  options.wbModel = WBMode_Auto;
+  options.sleep = 5000;
+
+  int code =  camera_init(&options);
+
+  if (code != ESP_OK) {
+    log_e("Camera init failed");
+  } else {
+    log_e("Camera init success");
+  }
+
+  shared_var_mutex = xSemaphoreCreateMutex();
+
+  MDNS.begin(hostString);
+  httpUpdater.setup(&httpServer);
+  initFs(&httpServer);
+
+  httpServer.on("/capture", HTTP_GET, [](){
+    int i=5;
+    do {
+      if(xSemaphoreTake(shared_var_mutex, portMAX_DELAY) == pdTRUE){
+        httpServer.send_P(200,"image/jpeg",(const char*)prev.buf,prev.len);
+        xSemaphoreGive(shared_var_mutex);
+        return;
+      } else {
+        delay(50);
+      }
+      i--;
+    } while (i > 0);
+    httpServer.send(500,"text/plain","mutex error!");
+  });
+
+  httpServer.on("/reboot", HTTP_GET, [](){
+    httpServer.send(200,"text/plain","success");
+    ESP.restart();
+  });
+
+  httpServer.begin();
+  MDNS.addService("http", "tcp", 8080);
+  Serial.printf("HTTPUpdateServer ready! Open http://%s.local/update in your browser\n", hostString);
 
   Serial.print("Camera Ready! Use 'http://");
   Serial.print(WiFi.localIP());
   Serial.println("' to connect");
 
-  MDNS.begin(hostString);
 
-  httpUpdater.setup(&httpServer);
-  initFs(&httpServer);
-  httpServer.begin();
-  
-  MDNS.addService("http", "tcp", 8080);
-  Serial.printf("HTTPUpdateServer ready! Open http://%s.local/update in your browser\n", hostString);
+  xTaskCreatePinnedToCore(
+    handlerHttp
+    ,  "httpd"
+    ,  2048  // Stack size
+    ,  NULL  // When no parameter is used, simply pass NULL
+    ,  1  // Priority
+    ,  NULL // With task handle we will be able to manipulate with this task.
+    ,  ARDUINO_RUNNING_CORE // Core on which the task will run
+    );
+
+  startCameraTask();
 }
 
+static size_t jpg_encode_stream(void *arg, size_t index, const void *data, size_t len) {
+  return len;
+}
+
+
+
 void loop() {
-  delay(100);
-  // Do nothing. Everything is done in another task by the web server
-  httpServer.handleClient();
+
+  delay(50);
+
 }

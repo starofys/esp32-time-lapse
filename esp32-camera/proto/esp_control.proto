@@ -1,0 +1,57 @@
+syntax = "proto3";
+
+enum FrameSize {
+    F_96X96 = 0;    // 96x96
+    QQVGA = 1;    // 160x120
+    QCIF  = 2;     // 176x144
+    HQVGA = 3;    // 240x176
+    F_240X240 = 4;  // 240x240
+    QVGA = 5;     // 320x240
+    CIF = 6;      // 400x296
+    HVGA = 7;     // 480x320
+    VGA = 8;      // 640x480
+    SVGA = 9;     // 800x600
+    XGA = 10;      // 1024x768
+    HD = 11;       // 1280x720
+    SXGA = 12;     // 1280x1024
+    UXGA = 13;     // 1600x1200
+    // 3MP Sensors
+    FHD = 14;      // 1920x1080
+    P_HD = 15;     //  720x1280
+    P_3MP = 16;    //  864x1536
+    QXGA = 17;     // 2048x1536
+    // 5MP Sensors
+    QHD = 18;      // 2560x1440
+    WQXGA = 19;    // 2560x1600
+    P_FHD = 20;    // 1080x1920
+    QSXGA = 21;    // 2560x1920
+    INVALID = 22;
+}
+enum PixFormat {
+    RGB565 = 0;    // 2BPP/RGB565
+    YUV422 = 1;    // 2BPP/YUV422
+    YUV420 = 2 ;    // 1.5BPP/YUV420
+    GRAYSCALE = 3; // 1BPP/GRAYSCALE
+    JPEG = 4;      // JPEG/COMPRESSED
+    RGB888 = 5;    // 3BPP/RGB888
+    RAW = 6;       // RAW
+    RGB444 = 7;    // 3BP2P/RGB444
+    RGB555= 8;    // 3BP2P/RGB555
+}
+enum WBMode {
+    Auto = 0;
+    Sunny = 1;
+    Cloudy = 2;
+    Office = 3;
+    Home = 4;
+}
+message CameraOption {
+    FrameSize frameSize = 1;
+    PixFormat pixFormat = 2;
+    WBMode    wbModel = 3;
+    int32 jpegQuality = 4;
+    int32 freqMHz = 5;
+    int32 flag = 6;
+    int32 sleep = 7;
+
+}

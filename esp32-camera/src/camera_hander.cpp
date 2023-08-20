@@ -1,13 +1,10 @@
 #include "camera_handler.h"
 #include "esp_inc.h"
-#include <esp_camera.h>
+
 #include <esp_pm.h>
 #include <esp_wifi.h>
 
-extern "C" {
-esp_err_t camera_enable_out_clock(camera_config_t *config);
-void camera_disable_out_clock();
-}
+
 
 extern camera_config_t config;
 
