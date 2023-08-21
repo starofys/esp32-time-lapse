@@ -41,7 +41,7 @@ void cameraHandler( void *pvParameters ) {
     }
 
     camera_start();
-    delay(80);
+    delay(20);
     unsigned long now = millis();
     camera_fb_t *fb = esp_camera_fb_get();
     if (!fb) {
@@ -53,7 +53,7 @@ void cameraHandler( void *pvParameters ) {
     snprintf(ts, 32, "%ld.%06ld", fb->timestamp.tv_sec, fb->timestamp.tv_usec);
     // esp_camera_fb_return(fb);
     Serial.printf("tm = %s, duertion %ld, len = %d\n", ts, millis() - now, fb->len);
-
+    WiFi.setSleep(false);
     uint8_t *buf = prev.buf;
     if (prev.len < fb->len) {
       if (buf) {
@@ -82,22 +82,25 @@ void cameraHandler( void *pvParameters ) {
     } else {
       prev.buf = 0;
     }
-    WiFi.setSleep(false);
+    
     delay(100);
     udp.beginPacket(udpAddress,udpPort);
     int startIdx = 0,endIdx;
     int idx = 0;
     int32_t head;
-    int action = 1;
+    int cmd = 1;
+    int flag = 0;
     for(;;) {
-      
       endIdx = startIdx + udpSize;
-      if (endIdx > fb->len) {
+      if (endIdx >= fb->len) {
         endIdx =  fb->len;
+        // 结束标志
+        flag = 1;
       }
-      head = CRC16((const char*)fb->buf,endIdx -  startIdx);
+      head = CRC16((const char*)&fb->buf[startIdx],endIdx -  startIdx);
       head |= idx << 16;
-      head |= action << 24;
+      head |= flag << 24;
+      head |= cmd << 28;
       udp.write((uint8_t*)&head,4);
       for(;startIdx < endIdx;startIdx++) {
         udp.write(fb->buf[startIdx]);
