@@ -9,6 +9,7 @@
 const char* ssid = "LEDE";
 const char* password = "zwyysfsj";
 const char * udpAddress = "192.168.123.116";
+// const char * udpAddress = "192.168.123.125";
 const int udpPort = 8080;
 const int udpSize = 1460 - 4;
 
@@ -97,8 +98,8 @@ void cameraHandler( void *pvParameters ) {
         // 结束标志
         flag = 1;
       }
-      head = CRC16((const char*)&fb->buf[startIdx],endIdx -  startIdx);
-      head |= idx << 16;
+      head = CRC16((const char*)&fb->buf[startIdx],endIdx -  startIdx) & 0xfff;
+      head |= idx << 12;
       head |= flag << 24;
       head |= cmd << 28;
       udp.write((uint8_t*)&head,4);
@@ -229,7 +230,7 @@ void setup() {
   xTaskCreatePinnedToCore(
     handlerHttp
     ,  "httpd"
-    ,  2048  // Stack size
+    ,  4096*2  // Stack size
     ,  NULL  // When no parameter is used, simply pass NULL
     ,  1  // Priority
     ,  NULL // With task handle we will be able to manipulate with this task.
