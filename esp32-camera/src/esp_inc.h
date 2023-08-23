@@ -10,7 +10,8 @@ extern "C" {
 unsigned short CRC16(const char* data, int length);
 }
 
-void initFs(WebServer *server);
+bool initFs(WebServer *server);
+bool readConfig(const char* path,const pb_msgdesc_t *fields,void* dist);
 int camera_init(CameraOption *options);
 
 void camera_start();
