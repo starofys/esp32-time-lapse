@@ -7,13 +7,13 @@
 // Enter your WiFi credentials
 // ===========================
 const char* ssid = "LEDE";
-const char* password = "zwyysfsj";
+const char* password = "xxx";
 // const char * udpAddress = "192.168.123.116";
 
 const int udpSize = 1460 - 4;
 
 CameraOption options;
-UdpServerOption udpServerConfig = {8080,"192.168.123.125"};
+UdpServerOption udpServerConfig = {8080,""};
 camera_fb_t prev = {0};
 char hostString[16];
 WebServer httpServer(8080);
@@ -33,7 +33,47 @@ bool isUploading() {
   }
   
 }
-
+void sendUdp(camera_fb_t *fb) {
+  if (strlen(udpServerConfig.ip) ==0 || udpServerConfig.port == 0) {
+    return;
+  }
+  udp.beginPacket(udpServerConfig.ip, udpServerConfig.port);
+  int startIdx = 0, endIdx;
+  int idx = 0;
+  int32_t head;
+  int cmd = 1;
+  int flag = 0;
+  for (;;)
+  {
+    endIdx = startIdx + udpSize;
+    if (endIdx >= fb->len)
+    {
+      endIdx = fb->len;
+      // 结束标志
+      flag = 1;
+    }
+    head = CRC16((const char *)&fb->buf[startIdx], endIdx - startIdx) & 0xfff;
+    head |= idx << 12;
+    head |= flag << 24;
+    head |= cmd << 28;
+    udp.write((uint8_t *)&head, 4);
+    for (; startIdx < endIdx; startIdx++)
+    {
+      udp.write(fb->buf[startIdx]);
+    }
+    if (startIdx >= fb->len)
+    {
+      break;
+    }
+    idx++;
+  }
+  udp.endPacket();
+}
+bool reloadConfig() {
+    bool result = readConfig("/config_camera.pb",CameraOption_fields,&options);
+    result = result || readConfig("/config_udp_server.pb",UdpServerOption_fields,&udpServerConfig);
+    return result;
+}
 void cameraHandler( void *pvParameters ) {
   sensor_t *s = esp_camera_sensor_get();
   for(;;) {
@@ -48,16 +88,35 @@ void cameraHandler( void *pvParameters ) {
       WiFi.setSleep(false);
       continue;
     }
-
+   
+    bool led = false;
+    if (options.flag & FLAG_LIGHT) {
+      led = true;
+    } else if (options.flag & FLAG_AUTO_LIGHT) {
+      time_t nowtime;
+	    time_t now = time(0);
+	    tm* p = localtime(&nowtime);
+      if (p->tm_hour > 18 || p->tm_hour < 6) {
+        led = true;
+      }
+    }
+    if (led) {
+      enable_led(led);
+    }
+    
     camera_start();
     delay(20);
     unsigned long now = millis();
     camera_fb_t *fb = esp_camera_fb_get();
+    if (led) {
+      enable_led(false);
+    }
+    camera_stop();
     if (!fb) {
         log_e("Camera capture failed %d",s->pixformat);
         continue;
     }
-    camera_stop();
+
     char ts[32];
     snprintf(ts, 32, "%ld.%06ld", fb->timestamp.tv_sec, fb->timestamp.tv_usec);
     // esp_camera_fb_return(fb);
@@ -93,33 +152,7 @@ void cameraHandler( void *pvParameters ) {
     }
     
     delay(100);
-    udp.beginPacket(udpServerConfig.ip,udpServerConfig.port);
-    int startIdx = 0,endIdx;
-    int idx = 0;
-    int32_t head;
-    int cmd = 1;
-    int flag = 0;
-    for(;;) {
-      endIdx = startIdx + udpSize;
-      if (endIdx >= fb->len) {
-        endIdx =  fb->len;
-        // 结束标志
-        flag = 1;
-      }
-      head = CRC16((const char*)&fb->buf[startIdx],endIdx -  startIdx) & 0xfff;
-      head |= idx << 12;
-      head |= flag << 24;
-      head |= cmd << 28;
-      udp.write((uint8_t*)&head,4);
-      for(;startIdx < endIdx;startIdx++) {
-        udp.write(fb->buf[startIdx]);
-      }
-      if (startIdx >=fb->len) {
-        break;
-      }
-      idx++;
-    }
-    udp.endPacket();
+    sendUdp(fb);
 
     esp_camera_fb_return(fb);
     if (!isUploading()) {
@@ -186,6 +219,11 @@ void initUpgrade() {
     httpServer.send(200,"text/plain","success");
     ESP.restart();
   });
+
+  httpServer.on("/reload", HTTP_GET, [](){
+    bool rs = reloadConfig();
+    httpServer.send(rs?200:500,"text/plain",rs?"success":"fail");
+  });
  
 }
 
@@ -204,15 +242,15 @@ void setup() {
   options.pixFormat = PixFormat_JPEG;
 
   options.wbModel = WBMode_Auto;
-  options.sleep = 5000;
+  options.sleep = 5;
 
   initUpgrade();
 
   if (initFs(&httpServer)) {
-    readConfig("/config_camera.pb",CameraOption_fields,&options);
-    readConfig("/config_udp_server.pb",UdpServerOption_fields,&options);
+    reloadConfig();
   }
   
+  options.sleep = options.sleep * 1000;
 
   WiFi.onEvent(WiFiEvent);
   WiFi.mode(WIFI_MODE_STA);

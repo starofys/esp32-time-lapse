@@ -59,15 +59,16 @@ void handleFileUpload(WebServer *server) {
   }
 }
 void initConfig(WebServer *server) {
-  server->on("/edit", HTTP_POST, [&]() {
+  server->enableCORS(true);
+  server->on("/edit", HTTP_POST, [=]() {
     server->send(200, "text/plain", "ok");
-  }, [&]() {
+  }, [=]() {
     handleFileUpload(server);
   });
 }
 
 bool initFs(WebServer *server) {
-    if(!LittleFS.begin(false)){
+    if(!LittleFS.begin(true)){
         Serial.println("LittleFS Mount Failed");
         return false;
     }
@@ -101,7 +102,10 @@ static bool _readConfig(const char* path,const pb_msgdesc_t *fields,void* dist){
     Serial.println("config file is big");
     return false;
   }
+  Serial.printf("file size %d\n",size);
   uint8_t buffer[512];
+  size = f.readBytes((char*)buffer,size);
+  Serial.printf("read size %d\n",size);
   pb_istream_t istream = pb_istream_from_buffer(buffer, size);
   return pb_decode(&istream, fields, dist);
 

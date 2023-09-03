@@ -11,7 +11,7 @@
 
 #ifndef STASSID
 #define STASSID "LEDE"
-#define STAPSK  "zwyysfsj"
+#define STAPSK  "xxx"
 #endif
 
 const char* host = "esp32-webupdate";
