@@ -71,6 +71,9 @@ void sendUdp(camera_fb_t *fb) {
 }
 bool reloadConfig() {
     bool result = readConfig("/config_camera.pb",CameraOption_fields,&options);
+    if (result) {
+      options.sleep = options.sleep * 1000;
+    }
     result = result || readConfig("/config_udp_server.pb",UdpServerOption_fields,&udpServerConfig);
     return result;
 }
@@ -242,7 +245,7 @@ void setup() {
   options.pixFormat = PixFormat_JPEG;
 
   options.wbModel = WBMode_Auto;
-  options.sleep = 5;
+  options.sleep = 5 * 1000;
 
   initUpgrade();
 
@@ -250,7 +253,7 @@ void setup() {
     reloadConfig();
   }
   
-  options.sleep = options.sleep * 1000;
+  
 
   WiFi.onEvent(WiFiEvent);
   WiFi.mode(WIFI_MODE_STA);
